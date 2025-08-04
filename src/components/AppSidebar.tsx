@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { 
   Upload, 
   Settings, 
@@ -23,9 +22,7 @@ import {
   SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarTrigger,
-  useSidebar,
+  SidebarMenuItem
 } from "@/components/ui/sidebar";
 
 const navigationItems = [
@@ -60,14 +57,12 @@ export function AppSidebar() {
             <div className="w-8 h-8 bg-gradient-ai rounded-lg flex items-center justify-center">
               <Database className="w-4 h-4 text-white" />
             </div>
-            {!collapsed && (
-              <div>
-                <h2 className="font-bold text-lg bg-gradient-ai bg-clip-text text-transparent">
-                  AutoML Pro
-                </h2>
-                <p className="text-xs text-muted-foreground">ML Platform</p>
-              </div>
-            )}
+            <div>
+              <h2 className="font-bold text-lg bg-gradient-ai bg-clip-text text-transparent">
+                AutoML Pro
+              </h2>
+              <p className="text-xs text-muted-foreground">ML Platform</p>
+            </div>
           </div>
         </div>
 
