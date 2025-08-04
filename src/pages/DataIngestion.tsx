@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,6 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   Upload, 
   Database, 
@@ -14,43 +16,171 @@ import {
   CheckCircle, 
   AlertCircle,
   Info,
-  ExternalLink
+  ExternalLink,
+  Eye,
+  Download,
+  Loader2
 } from "lucide-react";
+import { apiService, ColumnInfo } from "@/services/api";
+import { downloadSampleData } from "@/utils/exportUtils";
+import { DataConnectorModal } from "@/components/modals/DataConnectorModal";
+import { CloudStorageModal } from "@/components/modals/CloudStorageModal";
+import { useToast } from "@/hooks/use-toast";
 
 const DataIngestion = () => {
+  const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // State management
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [previewData, setPreviewData] = useState<any[]>([]);
+  const [columnTypes, setColumnTypes] = useState<ColumnInfo[]>([]);
+  const [totalRows, setTotalRows] = useState(0);
+  const [isValidating, setIsValidating] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  
+  // Modal states
+  const [showDataConnectorModal, setShowDataConnectorModal] = useState(false);
+  const [showCloudStorageModal, setShowCloudStorageModal] = useState(false);
+  const [showAllColumnsModal, setShowAllColumnsModal] = useState(false);
 
-  // Mock data preview
-  const previewData = [
-    { id: 1, age: 25, income: 50000, education: "Bachelor", target: "Yes" },
-    { id: 2, age: 32, income: 75000, education: "Master", target: "No" },
-    { id: 3, age: 28, income: 60000, education: "Bachelor", target: "Yes" },
-    { id: 4, age: 45, income: 90000, education: "PhD", target: "No" },
-    { id: 5, age: 23, income: 40000, education: "Bachelor", target: "Yes" },
-  ];
+  // File upload handlers
+  const handleFileUpload = useCallback(async (file: File) => {
+    if (!file) return;
 
-  const columnTypes = [
-    { name: "id", type: "Numeric", detected: "Integer", status: "valid" },
-    { name: "age", type: "Numeric", detected: "Integer", status: "valid" },
-    { name: "income", type: "Numeric", detected: "Float", status: "valid" },
-    { name: "education", type: "Categorical", detected: "String", status: "valid" },
-    { name: "target", type: "Categorical", detected: "String", status: "target" },
-  ];
+    const validTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/json',
+    ];
 
-  const handleFileUpload = () => {
-    setIsUploading(true);
-    // Simulate upload progress
-    const interval = setInterval(() => {
-      setUploadProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsUploading(false);
-          return 100;
-        }
-        return prev + 10;
+    if (!validTypes.includes(file.type)) {
+      toast({
+        title: "Invalid File Type",
+        description: "Please upload a CSV, Excel, or JSON file",
+        variant: "destructive",
       });
-    }, 200);
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(0);
+    setUploadedFile(file);
+
+    try {
+      const response = await apiService.uploadFile(file, (progress) => {
+        setUploadProgress(progress);
+      });
+
+      if (response.success && response.data) {
+        setPreviewData(response.data.sample_rows);
+        setColumnTypes(response.data.column_info);
+        setTotalRows(response.data.total_rows);
+        
+        toast({
+          title: "Upload Successful",
+          description: `${file.name} uploaded successfully`,
+        });
+
+        // Auto-validate schema
+        await validateDataSchema(response.data);
+      } else {
+        toast({
+          title: "Upload Failed",
+          description: response.error || "Failed to upload file",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Upload Error",
+        description: "An unexpected error occurred during upload",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  }, [toast]);
+
+  const validateDataSchema = async (data: any) => {
+    setIsValidating(true);
+    try {
+      const validation = await apiService.validateSchema(data);
+      
+      if (validation.is_valid) {
+        toast({
+          title: "Schema Valid",
+          description: "Your dataset schema is valid for machine learning",
+        });
+      } else {
+        toast({
+          title: "Schema Issues Found",
+          description: `${validation.issues.length} issues detected`,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('Schema validation error:', error);
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // Drag and drop handlers
+  const handleDrag = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileUpload(e.dataTransfer.files[0]);
+    }
+  }, [handleFileUpload]);
+
+  const handleFileSelect = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFileUpload(e.target.files[0]);
+    }
+  };
+
+  // Export handlers
+  const handleExportSample = () => {
+    if (previewData.length > 0) {
+      downloadSampleData(previewData, uploadedFile?.name);
+      toast({
+        title: "Export Started",
+        description: "Sample data is being downloaded",
+      });
+    }
+  };
+
+  // External source handlers
+  const handleExternalSourceSuccess = (data: any) => {
+    setPreviewData(data.sample_rows);
+    setColumnTypes(data.column_info);
+    setTotalRows(data.sample_rows.length);
+    
+    toast({
+      title: "Connection Successful",
+      description: "External data source connected successfully",
+    });
   };
 
   return (
@@ -100,22 +230,51 @@ const DataIngestion = () => {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
+                <div 
+                  className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                    dragActive ? 'border-primary bg-primary/5' : 'border-border'
+                  }`}
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                >
                   <Upload className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
                   <h3 className="text-lg font-semibold mb-2">Drop files here</h3>
                   <p className="text-muted-foreground mb-4">or click to browse</p>
-                  <Button onClick={handleFileUpload} disabled={isUploading}>
-                    {isUploading ? "Uploading..." : "Select Files"}
+                  <Button onClick={handleFileSelect} disabled={isUploading}>
+                    {isUploading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      "Select Files"
+                    )}
                   </Button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls,.json"
+                    onChange={handleFileInputChange}
+                    className="hidden"
+                  />
                 </div>
 
-                {isUploading && (
+                {isUploading && uploadedFile && (
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
-                      <span>Uploading customer_data.csv</span>
+                      <span>Uploading {uploadedFile.name}</span>
                       <span>{uploadProgress}%</span>
                     </div>
                     <Progress value={uploadProgress} className="h-2" />
+                  </div>
+                )}
+
+                {isValidating && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Validating schema...
                   </div>
                 )}
 
@@ -138,36 +297,43 @@ const DataIngestion = () => {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {columnTypes.map((col) => (
-                    <div key={col.name} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded bg-gradient-primary flex items-center justify-center">
-                          <FileText className="w-4 h-4 text-primary-foreground" />
+                {columnTypes.length > 0 ? (
+                  <div className="space-y-3">
+                    {columnTypes.map((col) => (
+                      <div key={col.name} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded bg-gradient-primary flex items-center justify-center">
+                            <FileText className="w-4 h-4 text-primary-foreground" />
+                          </div>
+                          <div>
+                            <p className="font-medium">{col.name}</p>
+                            <p className="text-sm text-muted-foreground">{col.detected}</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium">{col.name}</p>
-                          <p className="text-sm text-muted-foreground">{col.detected}</p>
+                        <div className="flex items-center gap-2">
+                          <Badge 
+                            variant={col.status === 'target' ? 'default' : 'secondary'}
+                            className={col.status === 'target' ? 'bg-accent text-accent-foreground' : ''}
+                          >
+                            {col.type}
+                          </Badge>
+                          {col.status === 'valid' ? (
+                            <CheckCircle className="w-4 h-4 text-success" />
+                          ) : col.status === 'target' ? (
+                            <Info className="w-4 h-4 text-accent" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-warning" />
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge 
-                          variant={col.status === 'target' ? 'default' : 'secondary'}
-                          className={col.status === 'target' ? 'bg-accent text-accent-foreground' : ''}
-                        >
-                          {col.type}
-                        </Badge>
-                        {col.status === 'valid' ? (
-                          <CheckCircle className="w-4 h-4 text-success" />
-                        ) : col.status === 'target' ? (
-                          <Info className="w-4 h-4 text-accent" />
-                        ) : (
-                          <AlertCircle className="w-4 h-4 text-warning" />
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>Upload a file to see column analysis</p>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -181,39 +347,63 @@ const DataIngestion = () => {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-border">
-                      {Object.keys(previewData[0]).map((key) => (
-                        <th key={key} className="text-left p-3 font-semibold">
-                          {key}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewData.map((row, index) => (
-                      <tr key={index} className="border-b border-border/50 hover:bg-muted/50">
-                        {Object.values(row).map((value, i) => (
-                          <td key={i} className="p-3">
-                            {value}
-                          </td>
+              {previewData.length > 0 ? (
+                <>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          {Object.keys(previewData[0]).map((key) => (
+                            <TableHead key={key} className="font-semibold">
+                              {key}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {previewData.map((row, index) => (
+                          <TableRow key={index}>
+                            {Object.values(row).map((value, i) => (
+                              <TableCell key={i}>
+                                {String(value)}
+                              </TableCell>
+                            ))}
+                          </TableRow>
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="mt-4 flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                  Showing 5 of 10,000 rows
-                </p>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm">View All Columns</Button>
-                  <Button variant="outline" size="sm">Export Sample</Button>
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between">
+                    <p className="text-sm text-muted-foreground">
+                      Showing {previewData.length} of {totalRows.toLocaleString()} rows
+                    </p>
+                    <div className="flex gap-2">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => setShowAllColumnsModal(true)}
+                      >
+                        <Eye className="w-4 h-4 mr-2" />
+                        View All Columns
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={handleExportSample}
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Export Sample
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Upload className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                  <h3 className="text-lg font-semibold mb-2">No Data to Preview</h3>
+                  <p>Upload a file or connect to a data source to see preview</p>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -253,6 +443,7 @@ const DataIngestion = () => {
                       className="w-full" 
                       disabled={connector.status !== 'available'}
                       variant={connector.status === 'available' ? 'default' : 'outline'}
+                      onClick={() => connector.status === 'available' && setShowDataConnectorModal(true)}
                     >
                       Connect
                     </Button>
@@ -298,7 +489,10 @@ const DataIngestion = () => {
                         className="mt-1"
                       />
                     </div>
-                    <Button className="w-full bg-gradient-primary">
+                    <Button 
+                      className="w-full bg-gradient-primary"
+                      onClick={() => setShowCloudStorageModal(true)}
+                    >
                       Connect & Sync
                     </Button>
                   </div>
@@ -308,6 +502,83 @@ const DataIngestion = () => {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Modals */}
+      <DataConnectorModal
+        isOpen={showDataConnectorModal}
+        onClose={() => setShowDataConnectorModal(false)}
+        onSuccess={handleExternalSourceSuccess}
+      />
+
+      <CloudStorageModal
+        isOpen={showCloudStorageModal}
+        onClose={() => setShowCloudStorageModal(false)}
+        onSuccess={handleExternalSourceSuccess}
+      />
+
+      {/* View All Columns Modal */}
+      <Dialog open={showAllColumnsModal} onOpenChange={setShowAllColumnsModal}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>All Columns</DialogTitle>
+            <DialogDescription>
+              Complete column information and data types
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {columnTypes.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Column Name</TableHead>
+                    <TableHead>Data Type</TableHead>
+                    <TableHead>Detected Type</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Sample Values</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {columnTypes.map((col) => (
+                    <TableRow key={col.name}>
+                      <TableCell className="font-medium">{col.name}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{col.type}</Badge>
+                      </TableCell>
+                      <TableCell>{col.detected}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {col.status === 'valid' ? (
+                            <CheckCircle className="w-4 h-4 text-success" />
+                          ) : col.status === 'target' ? (
+                            <Info className="w-4 h-4 text-accent" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-warning" />
+                          )}
+                          <span className="capitalize">{col.status}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-2">
+                          {previewData.slice(0, 3).map((row, index) => (
+                            <Badge key={index} variant="secondary" className="text-xs">
+                              {String(row[col.name])}
+                            </Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>No data available</p>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
